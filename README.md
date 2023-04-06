@@ -593,10 +593,7 @@ MERGE (n:DEMO_QA {qa:map.qa,label:map.label});
 ```
 
 ## 九、运行Graph QABot页面
-
-
-
-# ===============================
+![QABot](images/QABot.png)
 
 
 
