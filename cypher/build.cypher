@@ -155,7 +155,7 @@ false,
 
 
 //配置词库
-//dic/dynamic/dynamic.dic
+//dynamic.dic
 //意图配置相关词
 WITH custom.inference.intended.qabot() AS str
 WITH apoc.convert.fromJsonList(str) as list
