@@ -237,10 +237,11 @@ false,
 ```
 
 ### 5.4 配置意图匹配规则
+>`CONTAINS`模式、`EQUALS`模式、`OTHER`词列表求交集模式
 ```sql
 CALL apoc.custom.asFunction(
 'inference.intended.qabot',
-'RETURN \'[{"label":"上市日期","return_var_alias":"n1","sort":1,"list":["是什么时候","什么时候"]},{"label":"学历","return_var_alias":"n2","sort":2,"list":["什么学历"]},{"label":"高管","return_var_alias":"n3","sort":3,"list":["高管有多少位","高管都有哪些","高管有多少个"]},{"label":"股票","return_var_alias":"n4","sort":4,"list":["哪些上市公司","有多少家上市公司","哪个公司","有多少家","公司有哪些","公司有多少家","股票有哪些","股票有多少支"]},{"label":"行业","return_var_alias":"n5","sort":5,"list":["什么行业","同一个行业嘛"]},{"label":"行业","return_var_alias":"n6","sort":6,"list":["什么行业"]}]\' AS intendedIntent',
+'RETURN \'[{"label":"上市日期","return_var_alias":"n1","sort":1,"list":["是什么时候","什么时候"],"parse_mode":"CONTAINS","order_by_field":null,"order_by_type":null},{"label":"学历","return_var_alias":"n2","sort":2,"list":["什么学历"],"parse_mode":"CONTAINS","order_by_field":null,"order_by_type":null},{"label":"高管","return_var_alias":"n3","sort":3,"list":["高管有多少位","高管都有哪些","高管有多少个"],"parse_mode":"CONTAINS","order_by_field":null,"order_by_type":null},{"label":"股票","return_var_alias":"n4","sort":4,"list":["哪些上市公司","有多少家上市公司","哪个公司","有多少家","公司有哪些","公司有多少家","股票有哪些","股票有多少支","股票有多少个","股票代码？","股票？"],"parse_mode":"CONTAINS","order_by_field":null,"order_by_type":null},{"label":"行业","return_var_alias":"n5","sort":5,"list":["什么行业","同一个行业嘛"],"parse_mode":"CONTAINS","order_by_field":null,"order_by_type":null},{"label":"股票名称","return_var_alias":"n6","sort":6,"list":["股票名称？"],"parse_mode":"CONTAINS","order_by_field":null,"order_by_type":null},{"label":"性别","return_var_alias":"n7","sort":7,"list":["性别"],"parse_mode":"OTHER","order_by_field":null,"order_by_type":null},{"label":"性别","return_var_alias":"n8","sort":8,"list":["查询性别"],"parse_mode":"EQUALS","order_by_field":null,"order_by_type":null}]\' AS intendedIntent',
 'STRING',
 NULL,
 false,
@@ -299,12 +300,13 @@ python.commands.path=E:\\software\\anaconda3\\python.exe
 
 ### 6.2 配置词
 ```cypher
-//dic/dynamic/dynamic.dic
+//dic,dynamic,dynamic.dic
 //意图配置相关词
 WITH custom.inference.intended.qabot() AS str
 WITH apoc.convert.fromJsonList(str) as list
 UNWIND list AS map
-WITH map.label AS label,map.list as list
+WITH map.label AS label,map.list as list,map
+WHERE UPPER(map.parse_mode)<>'CONTAINS' AND UPPER(map.parse_mode)<>'EQUALS'
 WITH apoc.coll.union([label],list) as list
 UNWIND list AS wd
 WITH collect(DISTINCT wd) AS list
@@ -328,7 +330,7 @@ CALL apoc.cypher.run('MATCH (n:'+lb+') WHERE NOT n.value CONTAINS \' \' RETURN C
 WITH value.list AS list
 RETURN olab.nlp.userdic.add('dynamic.dic',list,true,'UTF-8') AS words;
 
-RETURN olab.nlp.userdic.add('dynamic.dic',['测试'],true,'UTF-8') AS words;
+RETURN olab.nlp.userdic.add('dynamic.dic',['测试','胡永乐','性别'],true,'UTF-8') AS words;
 ```
 
 ### 6.3 词库热更新
@@ -338,6 +340,7 @@ RETURN olab.nlp.userdic.refresh();
 
 ## 七、安装问答模块存储过程
 ### 7.1 问答结果
+#### 7.1.1 意图字符匹配和列表求交集【非分类模型解意图】
 ```sql
 // 1.搜索语句
 WITH LOWER('火力发电行业博士学历的男性高管有多少位？') AS query
@@ -350,29 +353,29 @@ WITH query,
      custom.inference.intended.qabot() AS intendedIntent,
      custom.inference.operators.parse(query) AS oper
 // 3.个性化语句解析：解析时间/解析页面
-WITH oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,
+WITH oper,oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,
      olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page
 // 4.从查询语句中过滤时间词
-WITH operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:' '})) AS query
 // 5.过滤时间词后进行分词
-WITH operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      olab.hanlp.standard.segment(query) AS words
 // 6.分词后结果只保留名词且不能是纯数字
-WITH operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH 'n' AND olab.string.matchCnEn(mp.word)<>'') OR mp.nature='uw')| m.word) AS words
 // 7.实体识别
-WITH operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,
-     olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,'EXACT',words,{isMergeLabelHit:true,labelMergeDis:0.4}) AS entityRecognitionHits
+WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,
+     olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,'EXACT',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits
 // 8.生成权重搜索队列
-WITH operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits
+WITH oper,operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits
 CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value
-WITH operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1
+WITH oper,operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1
 // 9.将个性化语句解析结果增加到entityRecognitionHit
-WITH operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit
+WITH oper,operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit
 // 10.意图识别
-WITH operator,graphDataSchema,intendedIntent,words,entityRecognitionHit,
-     apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,NULL,words,intendedIntent)) AS intentSchema
+WITH oper,operator,graphDataSchema,intendedIntent,words,entityRecognitionHit,
+     apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,oper.query,words,intendedIntent)) AS intentSchema
 WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes)
 // 11.图上下文语义解析
 WITH operator,graphDataSchema,intentSchema,intendedIntent,
@@ -392,8 +395,7 @@ RETURN value.result AS result;
 ```sql
 CALL apoc.custom.asProcedure(
 'qabot',
-'WITH LOWER($ask) AS query WITH query,      custom.inference.search.qabot() AS graphDataSchema,      custom.inference.weight.qabot() AS weight,      custom.inference.match.qabot() AS nodeHitsRules,      custom.inference.intended.qabot() AS intendedIntent,      custom.inference.operators.parse(query) AS oper WITH oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,      olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page WITH operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:\' \'})) AS query WITH operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      olab.hanlp.standard.segment(query) AS words WITH operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH \'n\' AND olab.string.matchCnEn(mp.word)<>\'\') OR mp.nature=\'uw\')| m.word) AS words WITH operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,      olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,\'EXACT\',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits WITH operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value WITH operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1 WITH operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit WITH operator,graphDataSchema,intendedIntent,words,entityRecognitionHit,      apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,NULL,words,intendedIntent)) AS intentSchema
-WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes) WITH operator,graphDataSchema,intentSchema,intendedIntent,      olab.semantic.schema(graphDataSchema,intentSchema,apoc.convert.toJson(entityRecognitionHit)) AS semantic_schema WITH olab.semantic.cypher(apoc.convert.toJson(semantic_schema),intentSchema,-1,100,{},operator) AS cypher WITH REPLACE(cypher,\'RETURN n\',\'RETURN DISTINCT n\') AS cypher CALL apoc.cypher.run(cypher,{}) YIELD value WITH value SKIP 0 LIMIT 100 WITH olab.map.keys(value) AS keys,value UNWIND keys AS key WITH apoc.map.get(value,key) AS n CALL apoc.case([apoc.coll.contains([\'NODE\'],apoc.meta.cypher.type(n)),\'WITH $n AS n,LABELS($n) AS lbs WITH lbs[0] AS label,n.value AS value RETURN label+$sml+UPPER(TOSTRING(value)) AS result\'],\'WITH $n AS n RETURN TOSTRING(n) AS result\',{n:n,sml:\'：\'}) YIELD value RETURN value.result AS result;',
+'WITH LOWER($ask) AS query WITH query,  custom.inference.search.qabot() AS graphDataSchema,  custom.inference.weight.qabot() AS weight,  custom.inference.match.qabot() AS nodeHitsRules,  custom.inference.intended.qabot() AS intendedIntent,  custom.inference.operators.parse(query) AS oper WITH oper,oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,  olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:\' \'})) AS query WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.hanlp.standard.segment(query) AS words WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH \'n\' AND olab.string.matchCnEn(mp.word)<>\'\') OR mp.nature=\'uw\')| m.word) AS words WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,  olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,\'EXACT\',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits WITH oper,operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value WITH oper,operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1 WITH oper,operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit WITH oper,operator,graphDataSchema,intendedIntent,words,entityRecognitionHit,  apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,oper.query,words,intendedIntent)) AS intentSchema WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes) WITH operator,graphDataSchema,intentSchema,intendedIntent,  olab.semantic.schema(graphDataSchema,intentSchema,apoc.convert.toJson(entityRecognitionHit)) AS semantic_schema WITH olab.semantic.cypher(apoc.convert.toJson(semantic_schema),intentSchema,-1,10,{},operator) AS cypher WITH REPLACE(cypher,\'RETURN n\',\'RETURN DISTINCT n\') AS cypher CALL apoc.cypher.run(cypher,{}) YIELD value WITH value SKIP 0 LIMIT 10 WITH olab.map.keys(value) AS keys,value UNWIND keys AS key WITH apoc.map.get(value,key) AS n CALL apoc.case([apoc.coll.contains([\'NODE\'],apoc.meta.cypher.type(n)),\'WITH $n AS n,LABELS($n) AS lbs WITH lbs[0] AS label,n.value AS value RETURN label+$sml+UPPER(TOSTRING(value)) AS result\'],\'WITH $n AS n RETURN TOSTRING(n) AS result\',{n:n,sml:\'：\'}) YIELD value RETURN value.result AS result;',
 'READ',
 [['result','STRING']],
 [['ask','STRING']],
@@ -403,6 +405,62 @@ WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJson
 
 ```sql
 CALL custom.qabot('火力发电行业博士学历的男性高管有多少位？') YIELD result RETURN result;
+```
+
+#### 7.1.2 带分类模型的查询方式【分类模型解意图】
+```json
+问题：胡永乐是男性还是女性？
+问题类别：查询性别
+```
+```sql
+// 1.搜索语句
+WITH LOWER('胡永乐是男性还是女性？') AS query,'查询性别' AS classifier_type
+// 2.个性化配置：图数据模型/本体权重/实体匹配规则/预期意图
+WITH classifier_type,query,
+     custom.inference.search.qabot() AS graphDataSchema,
+     custom.inference.weight.qabot() AS weight,
+     custom.inference.match.qabot() AS nodeHitsRules,
+     //预期意图定义中支持设置一个排序参数
+     custom.inference.intended.qabot() AS intendedIntent,
+     custom.inference.operators.parse(query) AS oper
+// 3.个性化语句解析：解析时间/解析页面
+WITH classifier_type,oper,oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,
+     olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page
+// 4.从查询语句中过滤时间词
+WITH classifier_type,oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+     olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:' '})) AS query
+// 5.过滤时间词后进行分词
+WITH classifier_type,oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+     olab.hanlp.standard.segment(query) AS words
+// 6.分词后结果只保留名词且不能是纯数字
+WITH classifier_type,oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+     EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH 'n' AND olab.string.matchCnEn(mp.word)<>'') OR mp.nature='uw')| m.word) AS words
+// 7.实体识别
+WITH classifier_type,oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,
+     olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,'EXACT',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits
+// 8.生成权重搜索队列
+WITH classifier_type,oper,operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits
+CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value
+WITH classifier_type,oper,operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1
+// 9.将个性化语句解析结果增加到entityRecognitionHit
+WITH classifier_type,oper,operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit
+// 10.意图识别
+WITH classifier_type,oper,operator,graphDataSchema,intendedIntent,words,entityRecognitionHit,
+     apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,oper.query,words,intendedIntent,classifier_type)) AS intentSchema
+WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes)
+// 11.图上下文语义解析
+WITH operator,graphDataSchema,intentSchema,intendedIntent,
+     olab.semantic.schema(graphDataSchema,intentSchema,apoc.convert.toJson(entityRecognitionHit)) AS semantic_schema
+// 12.查询转换【不设置skip参数,每个查询抽取100条结果】
+WITH olab.semantic.cypher(apoc.convert.toJson(semantic_schema),intentSchema,-1,10,{},operator) AS cypher
+WITH REPLACE(cypher,'RETURN n','RETURN DISTINCT n') AS cypher
+// 13.执行查询【value返回为一个MAP，MAP的KEY SIZE小于等于解析后返回意图类别个数】
+CALL apoc.cypher.run(cypher,{}) YIELD value WITH value SKIP 0 LIMIT 10
+WITH olab.map.keys(value) AS keys,value
+UNWIND keys AS key
+WITH apoc.map.get(value,key) AS n
+CALL apoc.case([apoc.coll.contains(['NODE'],apoc.meta.cypher.type(n)),'WITH $n AS n,LABELS($n) AS lbs WITH lbs[0] AS label,n.value AS value RETURN label+$sml+UPPER(TOSTRING(value)) AS result'],'WITH $n AS n RETURN TOSTRING(n) AS result',{n:n,sml:'：'}) YIELD value
+RETURN value.result AS result;
 ```
 
 ### 7.2 问答结果Cypher
@@ -418,29 +476,29 @@ WITH query,
      custom.inference.intended.qabot() AS intendedIntent,
      custom.inference.operators.parse(query) AS oper
 // 3.个性化语句解析：解析时间/解析页面
-WITH oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,
+WITH oper,oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,
      olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page
 // 4.从查询语句中过滤时间词
-WITH operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:' '})) AS query
 // 5.过滤时间词后进行分词
-WITH operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      olab.hanlp.standard.segment(query) AS words
 // 6.分词后结果只保留名词且不能是纯数字
-WITH operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH 'n' AND olab.string.matchCnEn(mp.word)<>'') OR mp.nature='uw')| m.word) AS words
 // 7.实体识别
-WITH operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,
+WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,
      olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,'EXACT',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits
 // 8.生成权重搜索队列
-WITH operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits
+WITH oper,operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits
 CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value
-WITH operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1
+WITH oper,operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1
 // 9.将个性化语句解析结果增加到entityRecognitionHit
-WITH operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit
+WITH oper,operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit
 // 10.意图识别
 WITH operator,graphDataSchema,intendedIntent,words,entityRecognitionHit,
-     apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,NULL,words,intendedIntent)) AS intentSchema
+     apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,oper.query,words,intendedIntent)) AS intentSchema
 WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes)
 // 11.图上下文语义解析
 WITH operator,graphDataSchema,intentSchema,intendedIntent,
@@ -454,8 +512,7 @@ RETURN cypher;
 ```sql
 CALL apoc.custom.asProcedure(
 'qabot.cypher',
-'WITH LOWER($ask) AS query WITH query,      custom.inference.search.qabot() AS graphDataSchema,      custom.inference.weight.qabot() AS weight,      custom.inference.match.qabot() AS nodeHitsRules,      custom.inference.intended.qabot() AS intendedIntent,      custom.inference.operators.parse(query) AS oper WITH oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,      olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page WITH operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:\' \'})) AS query WITH operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      olab.hanlp.standard.segment(query) AS words WITH operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH \'n\' AND olab.string.matchCnEn(mp.word)<>\'\') OR mp.nature=\'uw\')| m.word) AS words WITH operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,      olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,\'EXACT\',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits WITH operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value WITH operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1 WITH operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit WITH operator,graphDataSchema,intendedIntent,words,entityRecognitionHit,      apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,NULL,words,intendedIntent)) AS intentSchema
-WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes) WITH operator,graphDataSchema,intentSchema,intendedIntent,      olab.semantic.schema(graphDataSchema,intentSchema,apoc.convert.toJson(entityRecognitionHit)) AS semantic_schema WITH olab.semantic.cypher(apoc.convert.toJson(semantic_schema),intentSchema,-1,10,{},operator) AS cypher WITH REPLACE(cypher,\'RETURN n\',\'RETURN DISTINCT n\') AS cypher RETURN cypher;',
+'WITH LOWER($ask) AS query WITH query,  custom.inference.search.qabot() AS graphDataSchema,  custom.inference.weight.qabot() AS weight,  custom.inference.match.qabot() AS nodeHitsRules,  custom.inference.intended.qabot() AS intendedIntent,  custom.inference.operators.parse(query) AS oper WITH oper,oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,  olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:\' \'})) AS query WITH oper,operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.hanlp.standard.segment(query) AS words WITH oper,operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH \'n\' AND olab.string.matchCnEn(mp.word)<>\'\') OR mp.nature=\'uw\')| m.word) AS words WITH oper,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,  olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,\'EXACT\',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits WITH oper,operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value WITH oper,operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1 WITH oper,operator,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit WITH operator,graphDataSchema,intendedIntent,words,entityRecognitionHit,  apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,oper.query,words,intendedIntent)) AS intentSchema WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes) WITH operator,graphDataSchema,intentSchema,intendedIntent,  olab.semantic.schema(graphDataSchema,intentSchema,apoc.convert.toJson(entityRecognitionHit)) AS semantic_schema WITH olab.semantic.cypher(apoc.convert.toJson(semantic_schema),intentSchema,-1,10,{},operator) AS cypher WITH REPLACE(cypher,\'RETURN n\',\'RETURN DISTINCT n\') AS cypher RETURN cypher;',
 'READ',
 [['cypher','STRING']],
 [['ask','STRING']],
@@ -479,29 +536,29 @@ WITH query,
      //预期意图定义中支持设置一个排序参数
      custom.inference.intended.qabot() AS intendedIntent
 // 3.个性化语句解析：解析时间/解析页面
-WITH query,graphDataSchema,weight,nodeHitsRules,intendedIntent,
+WITH query AS oper,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,
      olab.nlp.timeparser(query) AS time,olab.nlp.pagenum.parse(query) AS page
 // 4.从查询语句中过滤时间词
-WITH graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:' '})) AS query
 // 5.过滤时间词后进行分词
-WITH query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      olab.hanlp.standard.segment(query) AS words
 // 6.分词后结果只保留名词且不能是纯数字
-WITH query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
+WITH oper,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,
      EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH 'n' AND olab.string.matchCnEn(mp.word)<>'') OR mp.nature='uw')| m.word) AS words
 // 7.实体识别
-WITH graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,
+WITH oper,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,
      olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,'EXACT',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits
 // 8.生成权重搜索队列
-WITH graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits
+WITH oper,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits
 CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value
-WITH graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1
+WITH oper,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1
 // 9.将个性化语句解析结果增加到entityRecognitionHit
-WITH graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit
+WITH oper,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit
 // 10.意图识别
 WITH graphDataSchema,intendedIntent,words,entityRecognitionHit,
-     apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,NULL,words,intendedIntent)) AS intentSchema
+     apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,oper,words,intendedIntent)) AS intentSchema
 WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes)
 // 11.图上下文语义解析
 WITH graphDataSchema,intentSchema,intendedIntent,
@@ -510,14 +567,15 @@ WITH graphDataSchema,intentSchema,intendedIntent,
 WITH olab.semantic.cypher(apoc.convert.toJson(semantic_schema),'',-1,10,{}) AS cypher
 // 13.执行查询【value返回为一个MAP，MAP的KEY SIZE小于等于解析后返回意图类别个数】
 CALL apoc.cypher.run(cypher,{}) YIELD value WITH value SKIP 0 LIMIT 10
-RETURN value.graph AS graph
+WITH value.graph AS graph
+UNWIND graph AS path
+RETURN path;
 ```
 
 ```sql
 CALL apoc.custom.asProcedure(
 'qabot.graph',
-'WITH LOWER($ask) AS query WITH query,      custom.inference.search.qabot() AS graphDataSchema,      custom.inference.weight.qabot() AS weight,      custom.inference.match.qabot() AS nodeHitsRules,      custom.inference.intended.qabot() AS intendedIntent WITH query,graphDataSchema,weight,nodeHitsRules,intendedIntent,      olab.nlp.timeparser(query) AS time,olab.nlp.pagenum.parse(query) AS page WITH graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:\' \'})) AS query WITH query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      olab.hanlp.standard.segment(query) AS words WITH query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,      EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH \'n\' AND olab.string.matchCnEn(mp.word)<>\'\') OR mp.nature=\'uw\')| m.word) AS words WITH graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,      olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,\'EXACT\',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits WITH graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value WITH graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1 WITH graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit WITH graphDataSchema,intendedIntent,words,entityRecognitionHit,      apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,NULL,words,intendedIntent)) AS intentSchema
-WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes) WITH graphDataSchema,intentSchema,intendedIntent,      olab.semantic.schema(graphDataSchema,intentSchema,apoc.convert.toJson(entityRecognitionHit)) AS semantic_schema WITH olab.semantic.cypher(apoc.convert.toJson(semantic_schema),\'\',-1,10,{}) AS cypher CALL apoc.cypher.run(cypher,{}) YIELD value WITH value SKIP 0 LIMIT 10 WITH value.graph AS graph UNWIND graph AS path RETURN path;',
+'WITH LOWER($ask) AS query WITH query,  custom.inference.search.qabot() AS graphDataSchema,  custom.inference.weight.qabot() AS weight,  custom.inference.match.qabot() AS nodeHitsRules,  custom.inference.intended.qabot() AS intendedIntent WITH query AS oper,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,  olab.nlp.timeparser(query) AS time,olab.nlp.pagenum.parse(query) AS page WITH oper,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:\' \'})) AS query WITH oper,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.hanlp.standard.segment(query) AS words WITH oper,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH \'n\' AND olab.string.matchCnEn(mp.word)<>\'\') OR mp.nature=\'uw\')| m.word) AS words WITH oper,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,  olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,\'EXACT\',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits WITH oper,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value WITH oper,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit LIMIT 1 WITH oper,graphDataSchema,intendedIntent,words,custom.inference.parseadd.qabot(entityRecognitionHit,time,page).entityRecognitionHit AS entityRecognitionHit WITH graphDataSchema,intendedIntent,words,entityRecognitionHit,  apoc.convert.toJson(olab.intent.schema.parse(graphDataSchema,oper,words,intendedIntent)) AS intentSchema WHERE SIZE(apoc.convert.fromJsonList(intendedIntent))>SIZE(apoc.convert.fromJsonMap(intentSchema).graph.nodes) WITH graphDataSchema,intentSchema,intendedIntent,  olab.semantic.schema(graphDataSchema,intentSchema,apoc.convert.toJson(entityRecognitionHit)) AS semantic_schema WITH olab.semantic.cypher(apoc.convert.toJson(semantic_schema),\'\',-1,10,{}) AS cypher CALL apoc.cypher.run(cypher,{}) YIELD value WITH value SKIP 0 LIMIT 10 WITH value.graph AS graph UNWIND graph AS path RETURN path;',
 'READ',
 [['path','PATH']],
 [['ask','STRING']],
@@ -532,7 +590,7 @@ CALL custom.qabot.graph('火力发电行业博士学历的男性高管有多少�
 ### 7.4 生成推荐问题列表
 ```cypher
 // 1.搜索语句
-WITH LOWER('火力发电行业博士学历的男性高管有多少位？') AS query
+WITH LOWER('2023年三月六日上市的股票代码？') AS query
 // 2.个性化配置：图数据模型/本体权重/实体匹配规则/预期意图
 WITH query,query AS raw_query,
      custom.inference.search.qabot() AS graphDataSchema,
@@ -555,14 +613,14 @@ WITH raw_query,operator,query,graphDataSchema,weight,nodeHitsRules,intendedInten
      EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH 'n' AND olab.string.matchCnEn(mp.word)<>'') OR mp.nature='uw')| m.word) AS words
 // 7.实体识别
 WITH raw_query,query,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,
-     olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,'EXACT',words,{isMergeLabelHit:true,labelMergeDis:0.4}) AS entityRecognitionHits
+     olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,'EXACT',words,{isMergeLabelHit:true,labelMergeDis:0.5}) AS entityRecognitionHits
 // 8.生成权重搜索队列
 WITH raw_query,query,operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits
 CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value
 WITH raw_query,query,operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit
 WITH raw_query,entityRecognitionHit.entities AS map
 WITH raw_query,olab.map.keys(map) AS keys,map
-WITH raw_query,REDUCE(l=[],key IN keys | l+{raw:key,rep:FILTER(e IN apoc.map.get(map,key,NULL,FALSE) WHERE SIZE(key)>4)[0].labels[0]}) AS reps
+WITH raw_query,REDUCE(l=[],key IN keys | l+{raw:key,rep:FILTER(e IN apoc.map.get(map,key,NULL,FALSE) WHERE SIZE(key)>2)[0].labels[0]}) AS reps
 WITH raw_query,FILTER(e IN reps WHERE e.rep IS NOT NULL) AS reps
 WITH raw_query,olab.replace(raw_query,reps) AS re_query
 WITH raw_query,re_query,olab.editDistance(raw_query,re_query) AS score WHERE score<1
@@ -572,7 +630,7 @@ RETURN raw_query,re_query,score ORDER BY score DESC
 ```cypher
 CALL apoc.custom.asProcedure(
  'qabot.recommend_list',
- 'WITH LOWER($qa) AS query WITH query,query AS raw_query,  custom.inference.search.qabot() AS graphDataSchema,  custom.inference.weight.qabot() AS weight,  custom.inference.match.qabot() AS nodeHitsRules,  custom.inference.intended.qabot() AS intendedIntent,  custom.inference.operators.parse(query) AS oper WITH raw_query,oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,  olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page WITH raw_query,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:\' \'})) AS query WITH raw_query,operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.hanlp.standard.segment(query) AS words WITH raw_query,operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH \'n\' AND olab.string.matchCnEn(mp.word)<>\'\') OR mp.nature=\'uw\')| m.word) AS words WITH raw_query,query,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,  olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,\'EXACT\',words,{isMergeLabelHit:true,labelMergeDis:0.4}) AS entityRecognitionHits WITH raw_query,query,operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value WITH raw_query,query,operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit WITH raw_query,entityRecognitionHit.entities AS map WITH raw_query,olab.map.keys(map) AS keys,map WITH raw_query,REDUCE(l=[],key IN keys | l+{raw:key,rep:FILTER(e IN apoc.map.get(map,key,NULL,FALSE) WHERE SIZE(key)>4)[0].labels[0]}) AS reps WITH raw_query,FILTER(e IN reps WHERE e.rep IS NOT NULL) AS reps WITH raw_query,olab.replace(raw_query,reps) AS re_query WITH raw_query,re_query,olab.editDistance(raw_query,re_query) AS score WHERE score<1 AND score>0.6 RETURN DISTINCT raw_query,re_query,score ORDER BY score DESC LIMIT 10',
+ 'WITH LOWER($qa) AS query WITH query,query AS raw_query,  custom.inference.search.qabot() AS graphDataSchema,  custom.inference.weight.qabot() AS weight,  custom.inference.match.qabot() AS nodeHitsRules,  custom.inference.intended.qabot() AS intendedIntent,  custom.inference.operators.parse(query) AS oper WITH raw_query,oper.query AS query,oper.operator AS operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,  olab.nlp.timeparser(oper.query) AS time,olab.nlp.pagenum.parse(oper.query) AS page WITH raw_query,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.replace(query,REDUCE(l=[],mp IN time.list | l+{raw:mp.text,rep:\' \'})) AS query WITH raw_query,operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  olab.hanlp.standard.segment(query) AS words WITH raw_query,operator,query,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,  EXTRACT(m IN FILTER(mp IN words WHERE (mp.nature STARTS WITH \'n\' AND olab.string.matchCnEn(mp.word)<>\'\') OR mp.nature=\'uw\')| m.word) AS words WITH raw_query,query,operator,graphDataSchema,weight,nodeHitsRules,intendedIntent,time,page,words,  olab.entity.recognition(graphDataSchema,nodeHitsRules,NULL,\'EXACT\',words,{isMergeLabelHit:true,labelMergeDis:0.4}) AS entityRecognitionHits WITH raw_query,query,operator,graphDataSchema,weight,intendedIntent,time,page,words,entityRecognitionHits CALL olab.entity.ptmd.queue(graphDataSchema,entityRecognitionHits,weight) YIELD value WITH raw_query,query,operator,graphDataSchema,intendedIntent,time,page,words,value AS entityRecognitionHit WITH raw_query,entityRecognitionHit.entities AS map WITH raw_query,olab.map.keys(map) AS keys,map WITH raw_query,REDUCE(l=[],key IN keys | l+{raw:key,rep:FILTER(e IN apoc.map.get(map,key,NULL,FALSE) WHERE SIZE(key)>2)[0].labels[0]}) AS reps WITH raw_query,FILTER(e IN reps WHERE e.rep IS NOT NULL) AS reps WITH raw_query,olab.replace(raw_query,reps) AS re_query WITH raw_query,re_query,olab.editDistance(raw_query,re_query) AS score WHERE score<1 AND score>0.6 RETURN DISTINCT raw_query,re_query,score ORDER BY score DESC LIMIT 10',
  'READ',
  [['raw_query','STRING'],['re_query','STRING'],['score','NUMBER']],
  [['qa','STRING']],
@@ -580,12 +638,12 @@ CALL apoc.custom.asProcedure(
 );
 ```
 ```cypher
-CALL custom.qabot.recommend_list('火力发电行业博士学历的男性高管有多少位？') YIELD raw_query,re_query,score RETURN raw_query,re_query,score
+CALL custom.qabot.recommend_list('2023年三月六日上市的股票代码？') YIELD raw_query,re_query,score RETURN raw_query,re_query,score
 ```
 
 ## 八、配置样例问答
 ```cypher
-WITH '[{"qa":"火力发电行业博士学历的男性高管有多少位？","label":"学历"},{"qa":"山西都有哪些上市公司？","label":"地域"},{"qa":"富奥股份的高管都是什么学历？","label":"学历"},{"qa":"中国宝安属于什么行业？","label":"股票"},{"qa":"建筑工程行业有多少家上市公司？","label":"行业"},{"qa":"刘卫国是哪个公司的高管？","label":"高管"},{"qa":"美丽生态上市时间是什么时候？","label":"时间"},{"qa":"山西的上市公司有多少家？","label":"地域"},{"qa":"博士学历的高管都有哪些？","label":"学历"},{"qa":"上市公司是博士学历的高管有多少个？","label":"学历"},{"qa":"刘卫国是什么学历？","label":"高管"},{"qa":"富奥股份的男性高管有多少个？","label":"高管"},{"qa":"同在火力发电行业的上市公司有哪些？","label":"行业"},{"qa":"同在火力发电行业的上市公司有多少家？","label":"行业"},{"qa":"大悦城和荣盛发展是同一个行业嘛？","label":"股票"},{"qa":"同在河北的上市公司有哪些？","label":"股票"},{"qa":"神州高铁是什么时候上市的？","label":"时间"},{"qa":"火力发电行业男性高管有多少个？","label":"高管"},{"qa":"2023年三月六日上市的股票有哪些？","label":"股票"},{"qa":"20230306上市的股票有多少支？","label":"股票"}]' AS list
+WITH '[{"qa":"火力发电行业博士学历的男性高管有多少位？","label":"学历"},{"qa":"山西都有哪些上市公司？","label":"地域"},{"qa":"富奥股份的高管都是什么学历？","label":"学历"},{"qa":"中国宝安属于什么行业？","label":"股票"},{"qa":"建筑工程行业有多少家上市公司？","label":"行业"},{"qa":"刘卫国是哪个公司的高管？","label":"高管"},{"qa":"美丽生态上市时间是什么时候？","label":"时间"},{"qa":"山西的上市公司有多少家？","label":"地域"},{"qa":"博士学历的高管都有哪些？","label":"学历"},{"qa":"上市公司是博士学历的高管有多少个？","label":"学历"},{"qa":"刘卫国是什么学历？","label":"高管"},{"qa":"富奥股份的男性高管有多少个？","label":"高管"},{"qa":"同在火力发电行业的上市公司有哪些？","label":"行业"},{"qa":"同在火力发电行业的上市公司有多少家？","label":"行业"},{"qa":"大悦城和荣盛发展是同一个行业嘛？","label":"股票"},{"qa":"同在河北的上市公司有哪些？","label":"股票"},{"qa":"神州高铁是什么时候上市的？","label":"时间"},{"qa":"火力发电行业男性高管有多少个？","label":"高管"},{"qa":"2023年三月六日上市的股票代码？","label":"股票"},{"qa":"2023年三月六日上市的股票有哪些？","label":"股票"},{"qa":"2023年三月六日上市的股票有多少个？","label":"股票"},{"qa":"胡永乐是什么性别？","label":"性别"}]' AS list
 WITH apoc.convert.fromJsonList(list) AS list
 UNWIND list AS map
 WITH map
@@ -594,14 +652,4 @@ MERGE (n:DEMO_QA {qa:map.qa,label:map.label});
 
 ## 九、运行Graph QABot页面
 ![QABot](images/QABot.png)
-
-
-
-
-
-
-
-
-
-
 
